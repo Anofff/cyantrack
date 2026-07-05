@@ -24,7 +24,7 @@ from telegram.constants import ParseMode
 
 from data.store import log_arrival, get_active_batch, ActiveBatchError
 from bot.keyboards import volume_inline, main_menu_keyboard
-from bot.helpers import username, username_md, md_escape, restricted, divider
+from bot.helpers import username, username_md, md_escape, restricted, divider, broadcast_alert, restore_menu
 
 # conversation states
 WAIT_CUSTOM_VOLUME = 0
@@ -46,22 +46,6 @@ def _active_batch_message(batch: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"Finish or complete this batch before logging a new arrival."
     )
     return text, InlineKeyboardMarkup(actions)
-
-
-async def _restore_menu(update: Update, text: str) -> None:
-    """Send cancellation text and restore the bottom menu."""
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        await update.callback_query.message.reply_text(
-            "Use the menu below to continue.",
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await update.message.reply_text(
-            text,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(),
-        )
 
 
 # ── ENTRY ─────────────────────────────────────────────────────────────────────
@@ -184,6 +168,19 @@ async def cb_arrival_confirmed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         f"Tap *⏱ Start Treatment* in the menu when ready.",
         parse_mode=ParseMode.MARKDOWN,
     )
+    await query.message.reply_text(
+        "Use the menu below to continue.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+    alert = (
+        f"🚛 *Cyanide arrival logged*\n\n"
+        f"Batch #{batch['batch_id']} — *{volume:,.0f} L*\n"
+        f"🕐 {batch['arrived_at']}\n"
+        f"👤 {md_escape(batch['logged_by'])}"
+    )
+    await broadcast_alert(ctx.bot, alert)
+
     ctx.user_data.clear()
     return ConversationHandler.END
 
@@ -192,7 +189,7 @@ async def cb_arrival_cancelled(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
     ctx.user_data.clear()
-    await _restore_menu(update, "❌ Arrival cancelled.")
+    await restore_menu(update, "❌ Arrival cancelled.")
     return ConversationHandler.END
 
 

@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from telegram.helpers import escape_markdown
 
+from bot.keyboards import main_menu_keyboard
 from config import LOW_STOCK_THRESHOLD, ALLOWED_USERS, ALERT_CHAT_ID
 
 log = logging.getLogger(__name__)
@@ -89,6 +90,22 @@ def low_stock_warning(stock: int) -> str:
 
 def divider() -> str:
     return "━━━━━━━━━━━━━━━━━━"
+
+
+async def restore_menu(update: Update, text: str) -> None:
+    """Edit or send text and restore the persistent bottom menu."""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.reply_text(
+            "Use the menu below to continue.",
+            reply_markup=main_menu_keyboard(),
+        )
+    elif update.message:
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
 
 
 # ── GROUP BROADCAST ALERT ────────────────────────────────────────────────────

@@ -115,8 +115,18 @@ def staff_inline() -> InlineKeyboardMarkup:
             InlineKeyboardButton("✏️ Enter custom number", callback_data="stf_custom"),
         ],
         [
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
+            InlineKeyboardButton("◀️ Back to buckets", callback_data="stf_back"),
+            InlineKeyboardButton("❌ Cancel",           callback_data="cancel"),
         ],
+    ])
+
+
+def treatment_confirm_inline() -> InlineKeyboardMarkup:
+    """Final confirm before saving a completed treatment."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm & save", callback_data="treat_confirm")],
+        [InlineKeyboardButton("◀️ Back to staff",  callback_data="treat_back_staff")],
+        [InlineKeyboardButton("❌ Cancel",          callback_data="cancel")],
     ])
 
 

@@ -18,7 +18,7 @@ from telegram.constants import ParseMode
 
 from data.store import get_stock, add_stock
 from bot.keyboards import restock_inline, stock_actions_inline, main_menu_keyboard
-from bot.helpers import username, username_md, md_escape, stock_bar, low_stock_warning, divider, restricted
+from bot.helpers import username, username_md, md_escape, stock_bar, low_stock_warning, divider, restricted, restore_menu
 from config import LOW_STOCK_THRESHOLD
 
 WAIT_CUSTOM_RESTOCK = 30
@@ -157,21 +157,61 @@ async def _save_restock_query(query, ctx, qty: int, user: str) -> None:
         f"👤 By: {md_escape(user)}",
         parse_mode=ParseMode.MARKDOWN,
     )
+    await query.message.reply_text(
+        "Use the menu below to continue.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@restricted
+async def cmd_seed_stock(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """One-time seed for pilot sessions: /seed_stock 50"""
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: `/seed_stock 50` — sets initial bucket count.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    try:
+        qty = int(ctx.args[0])
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Enter a positive number, e.g. `/seed_stock 50`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    current = get_stock()
+    if current > 0:
+        await update.message.reply_text(
+            f"⚠️ Stock is already *{current} buckets*.\n"
+            f"Use `/add_stock` to add more, or restart the bot to re-seed.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    new_total = add_stock(qty, username(update), notes="initial seed")
+    bar = stock_bar(new_total)
+    await update.message.reply_text(
+        f"✅ *Stock seeded for pilot*\n\n"
+        f"{divider()}\n"
+        f"📦 Starting stock: *{new_total} buckets*\n"
+        f"{bar}\n"
+        f"👤 By: {username_md(update)}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 async def restock_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
-        await update.callback_query.edit_message_text("❌ Restock cancelled.")
-        await update.callback_query.message.reply_text(
-            "Use the menu below to continue.",
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await update.message.reply_text(
-            "❌ Restock cancelled.",
-            reply_markup=main_menu_keyboard(),
-        )
+    await restore_menu(update, "❌ Restock cancelled.")
     return ConversationHandler.END
 
 
@@ -199,6 +239,7 @@ def build_stock_handlers() -> list:
     )
     return [
         CommandHandler("stock", cmd_stock),
+        CommandHandler("seed_stock", cmd_seed_stock),
         MessageHandler(filters.Regex(r"^🪣 Stock Level$"), cmd_stock),
         CallbackQueryHandler(cb_refresh_stock, pattern=r"^action_refreshstock$"),
         conv,

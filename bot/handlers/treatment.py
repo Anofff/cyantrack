@@ -25,17 +25,22 @@ from data.store import (
     get_active_treatment,
     start_treatment,
     end_treatment,
+    get_stock,
     validate_stock_deduction,
     InvalidBatchStateError,
 )
-from bot.keyboards import bucket_inline, staff_inline, main_menu_keyboard
-from bot.helpers import username, username_md, md_escape, fmt_duration, low_stock_warning, divider, restricted, broadcast_alert
+from bot.keyboards import bucket_inline, staff_inline, treatment_confirm_inline, main_menu_keyboard
+from bot.helpers import (
+    username, username_md, fmt_duration, low_stock_warning, divider,
+    restricted, broadcast_alert, restore_menu,
+)
 
 # states
 WAIT_BUCKETS        = 10
 WAIT_STAFF          = 11
 WAIT_CUSTOM_BUCKETS = 12
 WAIT_CUSTOM_STAFF   = 13
+WAIT_CONFIRM        = 14
 
 
 # ── /start_treatment ──────────────────────────────────────────────────────────
@@ -117,6 +122,10 @@ async def cb_treat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         f"Tap *✅ End Treatment* when done.",
         parse_mode=ParseMode.MARKDOWN,
     )
+    await query.message.reply_text(
+        "Use the menu below to continue.",
+        reply_markup=main_menu_keyboard(),
+    )
 
 
 # ── /end_treatment ────────────────────────────────────────────────────────────
@@ -175,6 +184,36 @@ async def cb_bucket_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return WAIT_STAFF
 
 
+async def _bucket_step_text(ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    batch_id = ctx.user_data["batch_id"]
+    volume   = ctx.user_data["batch_vol"]
+    treatment = get_active_treatment(batch_id)
+    elapsed = 0
+    if treatment:
+        elapsed = round(
+            (datetime.now(timezone.utc) - treatment["started_at_raw"]).total_seconds() / 60
+        )
+    return (
+        f"✅ *Complete treatment — Batch #{batch_id}*\n\n"
+        f"{divider()}\n"
+        f"📦 Volume: *{volume:,.0f} L*\n"
+        f"⏱️ Running for: *{fmt_duration(elapsed)}*\n\n"
+        f"🪣 *How many buckets of Ca(OCl)₂ were used?*"
+    )
+
+
+@restricted
+async def cb_back_to_buckets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        await _bucket_step_text(ctx),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=bucket_inline(),
+    )
+    return WAIT_BUCKETS
+
+
 @restricted
 async def cb_bucket_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -208,11 +247,21 @@ async def cb_staff_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
     await query.answer()
     staff = int(query.data.replace("stf_", ""))
     ctx.user_data["staff"] = staff
-    saved = await _show_treatment_summary(update, query, ctx, edit=True)
-    if saved:
-        ctx.user_data.clear()
-        return ConversationHandler.END
-    return WAIT_BUCKETS
+    await _show_confirm_preview(query, ctx)
+    return WAIT_CONFIRM
+
+
+@restricted
+async def cb_back_to_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    buckets = ctx.user_data["buckets"]
+    await query.edit_message_text(
+        f"🪣 Buckets used: *{buckets}*\n\n👷 *How many staff worked this treatment?*",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=staff_inline(),
+    )
+    return WAIT_STAFF
 
 
 @restricted
@@ -233,33 +282,81 @@ async def receive_custom_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Enter a whole number e.g. *4*", parse_mode=ParseMode.MARKDOWN)
         return WAIT_CUSTOM_STAFF
     ctx.user_data["staff"] = staff
-    saved = await _show_treatment_summary(update, update.message, ctx, edit=False)
+    await _show_confirm_preview(update.message, ctx, edit=False)
+    return WAIT_CONFIRM
+
+
+def _confirm_preview_text(ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    buckets  = ctx.user_data["buckets"]
+    staff    = ctx.user_data["staff"]
+    volume   = ctx.user_data["batch_vol"]
+    batch_id = ctx.user_data["batch_id"]
+    treatment = get_active_treatment(batch_id)
+    elapsed = 0
+    if treatment:
+        elapsed = round(
+            (datetime.now(timezone.utc) - treatment["started_at_raw"]).total_seconds() / 60
+        )
+    current     = get_stock()
+    stock_after = current - buckets
+    stock_err   = validate_stock_deduction(buckets)
+    stock_line  = (
+        f"⚠️ Not enough stock — only *{current}* buckets available."
+        if stock_err else
+        f"📊 Stock after: *{stock_after} buckets*"
+    )
+    return (
+        f"📋 *Confirm treatment — Batch #{batch_id}*\n\n"
+        f"{divider()}\n"
+        f"📦 Volume: *{volume:,.0f} L*\n"
+        f"⏱️ Duration: *{fmt_duration(elapsed)}*\n"
+        f"🪣 Buckets: *{buckets}*\n"
+        f"👷 Staff: *{staff}*\n"
+        f"{stock_line}\n\n"
+        f"Save this treatment?"
+    )
+
+
+async def _show_confirm_preview(target, ctx: ContextTypes.DEFAULT_TYPE, edit: bool = True) -> None:
+    text = _confirm_preview_text(ctx)
+    if edit:
+        await target.edit_message_text(
+            text, parse_mode=ParseMode.MARKDOWN, reply_markup=treatment_confirm_inline(),
+        )
+    else:
+        await target.reply_text(
+            text, parse_mode=ParseMode.MARKDOWN, reply_markup=treatment_confirm_inline(),
+        )
+
+
+@restricted
+async def cb_treat_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer("✅ Saving...")
+    saved = await _finalize_treatment(update, query, ctx)
     if saved:
         ctx.user_data.clear()
         return ConversationHandler.END
     return WAIT_BUCKETS
 
 
-async def _show_treatment_summary(
-    update: Update, target, ctx: ContextTypes.DEFAULT_TYPE, edit: bool,
+async def _finalize_treatment(
+    update: Update, target, ctx: ContextTypes.DEFAULT_TYPE,
 ) -> bool:
-    """Save treatment and display the summary. Returns True if saved."""
+    """Save treatment after confirm. Returns True if saved."""
     treatment_id = ctx.user_data["treatment_id"]
     buckets      = ctx.user_data["buckets"]
     staff        = ctx.user_data["staff"]
     volume       = ctx.user_data["batch_vol"]
+    batch_id     = ctx.user_data["batch_id"]
 
     stock_err = validate_stock_deduction(buckets)
     if stock_err:
-        msg = f"⚠️ *Cannot complete treatment*\n\n{stock_err}"
-        if edit:
-            await target.edit_message_text(
-                msg, parse_mode=ParseMode.MARKDOWN, reply_markup=bucket_inline(),
-            )
-        else:
-            await target.reply_text(
-                msg, parse_mode=ParseMode.MARKDOWN, reply_markup=bucket_inline(),
-            )
+        await target.edit_message_text(
+            f"⚠️ *Cannot complete treatment*\n\n{stock_err}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=bucket_inline(),
+        )
         return False
 
     result    = end_treatment(treatment_id, buckets, staff, username(update))
@@ -278,26 +375,21 @@ async def _show_treatment_summary(
         f"{warning}"
     )
 
-    if edit:
-        await target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-        await target.message.reply_text(
-            "Use the menu below to continue.",
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await target.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_keyboard())
+    await target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    await target.message.reply_text(
+        "Use the menu below to continue.",
+        reply_markup=main_menu_keyboard(),
+    )
 
-    # broadcast to group if stock is low
     if new_stock <= 0 or warning:
         try:
-            bot = ctx.bot
             alert = (
                 f"🚨 *CyanTrack Alert*\n\n"
-                f"Treatment completed — Batch #{ctx.user_data['batch_id']}\n"
+                f"Treatment completed — Batch #{batch_id}\n"
                 f"⏱️ Duration: {duration}\n"
                 f"{warning}"
             )
-            await broadcast_alert(bot, alert)
+            await broadcast_alert(ctx.bot, alert)
         except Exception:
             pass
 
@@ -308,16 +400,7 @@ async def end_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ctx.user_data.clear()
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
-        await update.callback_query.edit_message_text("❌ Treatment completion cancelled.")
-        await update.callback_query.message.reply_text(
-            "Use the menu below to continue.",
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await update.message.reply_text(
-            "❌ Treatment completion cancelled.",
-            reply_markup=main_menu_keyboard(),
-        )
+    await restore_menu(update, "❌ Treatment completion cancelled.")
     return ConversationHandler.END
 
 
@@ -360,11 +443,16 @@ def build_end_treatment_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_buckets),
             ],
             WAIT_STAFF: [
-                CallbackQueryHandler(cb_staff_selected, pattern=r"^stf_\d+$"),
-                CallbackQueryHandler(cb_staff_custom,   pattern=r"^stf_custom$"),
+                CallbackQueryHandler(cb_staff_selected,   pattern=r"^stf_\d+$"),
+                CallbackQueryHandler(cb_staff_custom,     pattern=r"^stf_custom$"),
+                CallbackQueryHandler(cb_back_to_buckets,  pattern=r"^stf_back$"),
             ],
             WAIT_CUSTOM_STAFF: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_custom_staff),
+            ],
+            WAIT_CONFIRM: [
+                CallbackQueryHandler(cb_treat_confirm,   pattern=r"^treat_confirm$"),
+                CallbackQueryHandler(cb_back_to_staff,     pattern=r"^treat_back_staff$"),
             ],
         },
         fallbacks=[

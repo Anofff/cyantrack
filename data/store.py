@@ -15,7 +15,10 @@ Zero changes to bot code.
 """
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
+
+from config import DISPLAY_TZ
 
 
 class ActiveBatchError(Exception):
@@ -51,8 +54,26 @@ _inventory: list[dict] = []
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_display(dt: datetime) -> str:
+    local = dt.astimezone(ZoneInfo(DISPLAY_TZ))
+    tz_label = local.strftime("%Z") or DISPLAY_TZ
+    return local.strftime(f"%d %b %Y, %H:%M {tz_label}")
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat()
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+    return _format_display(_utc_now())
+
+
+def _month_key(iso_str: str) -> str:
+    return datetime.fromisoformat(iso_str).strftime("%Y-%m")
 
 def _next_id(table: list, prefix: str, id_field: str) -> str:
     nums = []
@@ -77,9 +98,11 @@ def log_arrival(volume: float, logged_by: str, notes: str = "") -> dict:
     if active:
         raise ActiveBatchError(active)
 
+    now = _utc_now()
     batch = {
-        "batch_id":   _next_id(_batches, "B", "batch_id"),
-        "arrived_at": _now(),
+        "batch_id":       _next_id(_batches, "B", "batch_id"),
+        "arrived_at":     _format_display(now),
+        "arrived_at_iso": _iso(now),
         "volume_l":   volume,
         "logged_by":  logged_by,
         "status":     "pending",
@@ -118,11 +141,13 @@ def start_treatment(batch_id: str, logged_by: str) -> dict:
     if get_active_treatment(batch_id):
         raise InvalidBatchStateError(batch_id, "treating")
 
+    now = _utc_now()
     treatment = {
         "treatment_id":          _next_id(_treatments, "T", "treatment_id"),
         "batch_id":              batch_id,
-        "started_at":            _now(),
-        "started_at_raw":        datetime.now(timezone.utc),
+        "started_at":            _format_display(now),
+        "started_at_iso":        _iso(now),
+        "started_at_raw":        now,
         "ended_at":              None,
         "duration_minutes":      None,
         "hypochlorite_buckets":  None,
@@ -155,11 +180,12 @@ def end_treatment(
             if stock_err:
                 raise InsufficientStockError(buckets, _current_stock())
 
-            now = datetime.now(timezone.utc)
+            now = _utc_now()
             started = t["started_at_raw"]
             duration = round((now - started).total_seconds() / 60, 1)
 
-            t["ended_at"]             = now.strftime("%d %b %Y, %H:%M UTC")
+            t["ended_at"]             = _format_display(now)
+            t["ended_at_iso"]         = _iso(now)
             t["duration_minutes"]     = duration
             t["hypochlorite_buckets"] = buckets
             t["staff_count"]          = staff
@@ -170,7 +196,8 @@ def end_treatment(
             current = _current_stock()
             new_stock = current - buckets
             _inventory.append({
-                "recorded_at":   now.strftime("%d %b %Y, %H:%M UTC"),
+                "recorded_at":     _format_display(now),
+                "recorded_at_iso": _iso(now),
                 "event_type":    "usage",
                 "change":        -buckets,
                 "stock_after":   new_stock,
@@ -206,8 +233,10 @@ def validate_stock_deduction(buckets: int) -> Optional[str]:
 def add_stock(buckets: int, logged_by: str, notes: str = "") -> int:
     current = _current_stock()
     new_stock = current + buckets
+    now = _utc_now()
     _inventory.append({
-        "recorded_at":  _now(),
+        "recorded_at":     _format_display(now),
+        "recorded_at_iso": _iso(now),
         "event_type":   "restock",
         "change":       +buckets,
         "stock_after":  new_stock,
@@ -224,16 +253,12 @@ def monthly_report(month: int, year: int) -> dict:
 
     batches = [
         b for b in _batches
-        if b["arrived_at"] and datetime.strptime(
-            b["arrived_at"], "%d %b %Y, %H:%M UTC"
-        ).strftime("%Y-%m") == month_str
+        if b.get("arrived_at_iso") and _month_key(b["arrived_at_iso"]) == month_str
     ]
 
     treatments = [
         t for t in _treatments
-        if t["ended_at"] and datetime.strptime(
-            t["ended_at"], "%d %b %Y, %H:%M UTC"
-        ).strftime("%Y-%m") == month_str
+        if t.get("ended_at_iso") and _month_key(t["ended_at_iso"]) == month_str
     ]
 
     durations = [t["duration_minutes"] for t in treatments if t["duration_minutes"]]
