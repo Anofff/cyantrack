@@ -22,7 +22,8 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from data.store import log_arrival, get_active_batch, ActiveBatchError
+from data.api import log_arrival, get_active_batch, ActiveBatchError
+from data.exceptions import SheetsWriteError
 from bot.keyboards import volume_inline, main_menu_keyboard
 from bot.helpers import username, username_md, md_escape, restricted, divider, broadcast_alert, restore_menu
 
@@ -157,6 +158,12 @@ async def cb_arrival_confirmed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
             text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup,
         )
         ctx.user_data.clear()
+        return ConversationHandler.END
+    except SheetsWriteError:
+        await query.edit_message_text(
+            "❌ *Could not save to Google Sheets*\n\nPlease try again in a moment.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
         return ConversationHandler.END
 
     await query.edit_message_text(

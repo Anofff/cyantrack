@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
 
-from config import BOT_TOKEN, INITIAL_STOCK
+from config import BOT_TOKEN, INITIAL_STOCK, SPREADSHEET_ID
 from bot.keyboards import main_menu_keyboard
 from bot.helpers import md_escape
 from bot.handlers.arrival import build_arrival_handler
@@ -45,7 +45,11 @@ WORKFLOW_TEXT = (
     "3️⃣ *⏱ Start Treatment* when work begins\n"
     "4️⃣ *✅ End Treatment* when done — confirm buckets & staff\n"
     "5️⃣ Check *📌 Status* or *🪣 Stock Level* anytime\n\n"
-    "_Data resets if the bot restarts — normal during pilot._"
+    + (
+        "_All data is saved to Google Sheets automatically._"
+        if SPREADSHEET_ID
+        else "_Data resets if the bot restarts — in-memory mode._"
+    )
 )
 
 
@@ -99,8 +103,25 @@ async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 def main() -> None:
     log.info("🚀 Starting CyanTrack bot...")
 
+    from data.api import hydrate, get_stock, add_stock
+
+    if SPREADSHEET_ID:
+        try:
+            hydrate()
+            log.info("📊 Using Google Sheets backend")
+        except PermissionError:
+            log.error(
+                "Cannot access spreadsheet — share it with your service account email "
+                "(see client_email in credentials.json) as Editor, then restart."
+            )
+            raise SystemExit(1)
+        except Exception as e:
+            log.error("Failed to connect to Google Sheets: %s", e)
+            raise SystemExit(1) from e
+    else:
+        log.info("💾 Using in-memory store (set SPREADSHEET_ID for persistence)")
+
     if INITIAL_STOCK:
-        from data.store import get_stock, add_stock
         if get_stock() == 0:
             add_stock(INITIAL_STOCK, "system", notes="startup seed")
             log.info("Seeded initial stock: %s buckets", INITIAL_STOCK)

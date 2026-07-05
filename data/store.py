@@ -20,31 +20,11 @@ from typing import Optional
 
 from config import DISPLAY_TZ
 
-
-class ActiveBatchError(Exception):
-    """Raised when logging arrival while a batch is still pending or treating."""
-
-    def __init__(self, batch: dict):
-        self.batch = batch
-        super().__init__(batch["batch_id"])
-
-
-class InsufficientStockError(Exception):
-    """Raised when a treatment would deduct more buckets than available."""
-
-    def __init__(self, buckets: int, current: int):
-        self.buckets = buckets
-        self.current = current
-        super().__init__(f"need {buckets}, have {current}")
-
-
-class InvalidBatchStateError(Exception):
-    """Raised when starting treatment on a batch that is not pending."""
-
-    def __init__(self, batch_id: str, status: str):
-        self.batch_id = batch_id
-        self.status = status
-        super().__init__(f"batch {batch_id} is {status}")
+from data.exceptions import (
+    ActiveBatchError,
+    InsufficientStockError,
+    InvalidBatchStateError,
+)
 
 # ── in-memory tables ──────────────────────────────────────────────────────────
 

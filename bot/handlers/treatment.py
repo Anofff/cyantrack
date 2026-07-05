@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from data.store import (
+from data.api import (
     get_active_batch,
     get_active_treatment,
     start_treatment,
@@ -29,6 +29,7 @@ from data.store import (
     validate_stock_deduction,
     InvalidBatchStateError,
 )
+from data.exceptions import SheetsWriteError
 from bot.keyboards import bucket_inline, staff_inline, treatment_confirm_inline, main_menu_keyboard
 from bot.helpers import (
     username, username_md, fmt_duration, low_stock_warning, divider,
@@ -109,6 +110,12 @@ async def cb_treat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         await query.edit_message_text(
             "⚠️ *Cannot start treatment*\n\n"
             "This batch is no longer pending — check *📌 Status* for the current state.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    except SheetsWriteError:
+        await query.edit_message_text(
+            "❌ *Could not save to Google Sheets*\n\nPlease try again.",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -359,7 +366,16 @@ async def _finalize_treatment(
         )
         return False
 
-    result    = end_treatment(treatment_id, buckets, staff, username(update))
+    try:
+        result = end_treatment(treatment_id, buckets, staff, username(update))
+    except SheetsWriteError:
+        await target.edit_message_text(
+            "❌ *Could not save to Google Sheets*\n\nPlease try again.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=treatment_confirm_inline(),
+        )
+        return False
+
     duration  = fmt_duration(result["duration_minutes"])
     new_stock = result["new_stock"]
     warning   = low_stock_warning(new_stock)

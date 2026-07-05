@@ -11,7 +11,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from telegram.constants import ParseMode
 
-from data.store import get_active_batch, get_active_treatment, monthly_report, get_stock
+from data.api import get_active_batch, get_active_treatment, monthly_report, get_stock
 from bot.keyboards import report_month_inline, main_menu_keyboard
 from bot.helpers import fmt_duration, low_stock_warning, divider, stock_bar, md_escape
 from config import LOW_STOCK_THRESHOLD

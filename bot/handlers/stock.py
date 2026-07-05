@@ -16,7 +16,8 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from data.store import get_stock, add_stock
+from data.api import get_stock, add_stock
+from data.exceptions import SheetsWriteError
 from bot.keyboards import restock_inline, stock_actions_inline, main_menu_keyboard
 from bot.helpers import username, username_md, md_escape, stock_bar, low_stock_warning, divider, restricted, restore_menu
 from config import LOW_STOCK_THRESHOLD
@@ -132,7 +133,15 @@ async def receive_custom_restock(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
 
 async def _save_restock(update: Update, ctx, qty: int) -> None:
-    new_total = add_stock(qty, username(update))
+    try:
+        new_total = add_stock(qty, username(update))
+    except SheetsWriteError:
+        await update.message.reply_text(
+            "❌ *Could not save to Google Sheets*\n\nPlease try again.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
+        return
     bar = stock_bar(new_total)
     text = (
         f"✅ *Stock updated!*\n\n"
@@ -146,7 +155,14 @@ async def _save_restock(update: Update, ctx, qty: int) -> None:
 
 
 async def _save_restock_query(query, ctx, qty: int, user: str) -> None:
-    new_total = add_stock(qty, user)
+    try:
+        new_total = add_stock(qty, user)
+    except SheetsWriteError:
+        await query.edit_message_text(
+            "❌ *Could not save to Google Sheets*\n\nPlease try again.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     bar = stock_bar(new_total)
     await query.edit_message_text(
         f"✅ *Stock updated!*\n\n"
