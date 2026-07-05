@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from telegram import Update, Bot
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
+from telegram.helpers import escape_markdown
 
 from config import LOW_STOCK_THRESHOLD, ALLOWED_USERS, ALERT_CHAT_ID
 
@@ -41,8 +42,19 @@ def restricted(func):
 # ── FORMATTING ────────────────────────────────────────────────────────────────
 
 def username(update: Update) -> str:
+    """Plain name for storage (Sheets, audit fields)."""
     user = update.effective_user
     return f"@{user.username}" if user.username else user.full_name
+
+
+def md_escape(text: str) -> str:
+    """Escape dynamic text for Telegram legacy Markdown messages."""
+    return escape_markdown(text, version=1)
+
+
+def username_md(update: Update) -> str:
+    """Username safe to embed in Markdown message bodies."""
+    return md_escape(username(update))
 
 
 def fmt_duration(minutes: float) -> str:

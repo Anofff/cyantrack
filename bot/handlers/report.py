@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 
 from data.store import get_active_batch, get_active_treatment, monthly_report, get_stock
 from bot.keyboards import report_month_inline, main_menu_keyboard
-from bot.helpers import fmt_duration, low_stock_warning, divider, stock_bar
+from bot.helpers import fmt_duration, low_stock_warning, divider, stock_bar, md_escape
 from config import LOW_STOCK_THRESHOLD
 
 
@@ -66,7 +66,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"📦 Volume: *{batch['volume_l']:,.0f} L*\n"
         f"🕐 Arrived: {batch['arrived_at']}\n"
         f"📌 Status: *{batch['status'].upper()}*\n"
-        f"👤 By: {batch['logged_by']}"
+        f"👤 By: {md_escape(batch['logged_by'])}"
         f"{elapsed_line}",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(action_row),

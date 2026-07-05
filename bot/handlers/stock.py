@@ -18,7 +18,7 @@ from telegram.constants import ParseMode
 
 from data.store import get_stock, add_stock
 from bot.keyboards import restock_inline, stock_actions_inline, main_menu_keyboard
-from bot.helpers import username, stock_bar, low_stock_warning, divider, restricted
+from bot.helpers import username, username_md, md_escape, stock_bar, low_stock_warning, divider, restricted
 from config import LOW_STOCK_THRESHOLD
 
 WAIT_CUSTOM_RESTOCK = 30
@@ -140,7 +140,7 @@ async def _save_restock(update: Update, ctx, qty: int) -> None:
         f"➕ Added: *{qty} buckets*\n"
         f"📦 New total: *{new_total} buckets*\n"
         f"{bar}\n"
-        f"👤 By: {username(update)}"
+        f"👤 By: {username_md(update)}"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_keyboard())
 
@@ -154,7 +154,7 @@ async def _save_restock_query(query, ctx, qty: int, user: str) -> None:
         f"➕ Added: *{qty} buckets*\n"
         f"📦 New total: *{new_total} buckets*\n"
         f"{bar}\n"
-        f"👤 By: {user}",
+        f"👤 By: {md_escape(user)}",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -163,8 +163,15 @@ async def restock_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
         await update.callback_query.edit_message_text("❌ Restock cancelled.")
+        await update.callback_query.message.reply_text(
+            "Use the menu below to continue.",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
-        await update.message.reply_text("❌ Restock cancelled.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(
+            "❌ Restock cancelled.",
+            reply_markup=main_menu_keyboard(),
+        )
     return ConversationHandler.END
 
 

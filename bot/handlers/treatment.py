@@ -20,9 +20,16 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from data.store import get_active_batch, get_active_treatment, start_treatment, end_treatment
+from data.store import (
+    get_active_batch,
+    get_active_treatment,
+    start_treatment,
+    end_treatment,
+    validate_stock_deduction,
+    InvalidBatchStateError,
+)
 from bot.keyboards import bucket_inline, staff_inline, main_menu_keyboard
-from bot.helpers import username, fmt_duration, low_stock_warning, divider, restricted, broadcast_alert
+from bot.helpers import username, username_md, md_escape, fmt_duration, low_stock_warning, divider, restricted, broadcast_alert
 
 # states
 WAIT_BUCKETS        = 10
@@ -84,20 +91,29 @@ async def cmd_start_treatment(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+@restricted
 async def cb_treat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Inline confirm → start the treatment."""
     query    = update.callback_query
     await query.answer("⏱️ Starting...")
     batch_id = query.data.replace("treat_start_", "")
 
-    treatment = start_treatment(batch_id, username(update))
+    try:
+        treatment = start_treatment(batch_id, username(update))
+    except InvalidBatchStateError:
+        await query.edit_message_text(
+            "⚠️ *Cannot start treatment*\n\n"
+            "This batch is no longer pending — check *📌 Status* for the current state.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
 
     await query.edit_message_text(
         f"⏱️ *Treatment started!*\n\n"
         f"{divider()}\n"
         f"📦 Batch #{batch_id}\n"
         f"🕐 Started: {treatment['started_at']}\n"
-        f"👤 By: {username(update)}\n\n"
+        f"👤 By: {username_md(update)}\n\n"
         f"Tap *✅ End Treatment* when done.",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -145,6 +161,7 @@ async def end_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # bucket callbacks
+@restricted
 async def cb_bucket_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -158,6 +175,7 @@ async def cb_bucket_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     return WAIT_STAFF
 
 
+@restricted
 async def cb_bucket_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -165,6 +183,7 @@ async def cb_bucket_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     return WAIT_CUSTOM_BUCKETS
 
 
+@restricted
 async def receive_custom_buckets(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         buckets = int(update.message.text.strip())
@@ -183,15 +202,20 @@ async def receive_custom_buckets(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
 
 # staff callbacks
+@restricted
 async def cb_staff_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     staff = int(query.data.replace("stf_", ""))
     ctx.user_data["staff"] = staff
-    await _show_treatment_summary(query, ctx, edit=True)
-    return ConversationHandler.END
+    saved = await _show_treatment_summary(update, query, ctx, edit=True)
+    if saved:
+        ctx.user_data.clear()
+        return ConversationHandler.END
+    return WAIT_BUCKETS
 
 
+@restricted
 async def cb_staff_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -199,6 +223,7 @@ async def cb_staff_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return WAIT_CUSTOM_STAFF
 
 
+@restricted
 async def receive_custom_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         staff = int(update.message.text.strip())
@@ -208,18 +233,36 @@ async def receive_custom_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Enter a whole number e.g. *4*", parse_mode=ParseMode.MARKDOWN)
         return WAIT_CUSTOM_STAFF
     ctx.user_data["staff"] = staff
-    await _show_treatment_summary(update.message, ctx, edit=False)
-    return ConversationHandler.END
+    saved = await _show_treatment_summary(update, update.message, ctx, edit=False)
+    if saved:
+        ctx.user_data.clear()
+        return ConversationHandler.END
+    return WAIT_BUCKETS
 
 
-async def _show_treatment_summary(target, ctx: ContextTypes.DEFAULT_TYPE, edit: bool) -> None:
-    """Save treatment and display the summary."""
+async def _show_treatment_summary(
+    update: Update, target, ctx: ContextTypes.DEFAULT_TYPE, edit: bool,
+) -> bool:
+    """Save treatment and display the summary. Returns True if saved."""
     treatment_id = ctx.user_data["treatment_id"]
     buckets      = ctx.user_data["buckets"]
     staff        = ctx.user_data["staff"]
     volume       = ctx.user_data["batch_vol"]
 
-    result    = end_treatment(treatment_id, buckets, staff, "")
+    stock_err = validate_stock_deduction(buckets)
+    if stock_err:
+        msg = f"⚠️ *Cannot complete treatment*\n\n{stock_err}"
+        if edit:
+            await target.edit_message_text(
+                msg, parse_mode=ParseMode.MARKDOWN, reply_markup=bucket_inline(),
+            )
+        else:
+            await target.reply_text(
+                msg, parse_mode=ParseMode.MARKDOWN, reply_markup=bucket_inline(),
+            )
+        return False
+
+    result    = end_treatment(treatment_id, buckets, staff, username(update))
     duration  = fmt_duration(result["duration_minutes"])
     new_stock = result["new_stock"]
     warning   = low_stock_warning(new_stock)
@@ -237,6 +280,10 @@ async def _show_treatment_summary(target, ctx: ContextTypes.DEFAULT_TYPE, edit: 
 
     if edit:
         await target.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        await target.message.reply_text(
+            "Use the menu below to continue.",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
         await target.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_keyboard())
 
@@ -254,7 +301,7 @@ async def _show_treatment_summary(target, ctx: ContextTypes.DEFAULT_TYPE, edit: 
         except Exception:
             pass
 
-    ctx.user_data.clear()
+    return True
 
 
 async def end_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -262,8 +309,15 @@ async def end_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
         await update.callback_query.answer("Cancelled")
         await update.callback_query.edit_message_text("❌ Treatment completion cancelled.")
+        await update.callback_query.message.reply_text(
+            "Use the menu below to continue.",
+            reply_markup=main_menu_keyboard(),
+        )
     else:
-        await update.message.reply_text("❌ Treatment completion cancelled.", reply_markup=main_menu_keyboard())
+        await update.message.reply_text(
+            "❌ Treatment completion cancelled.",
+            reply_markup=main_menu_keyboard(),
+        )
     return ConversationHandler.END
 
 
@@ -271,12 +325,13 @@ async def end_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def _reply(update: Update, text: str, reply_markup=None) -> None:
     kwargs = dict(text=text, parse_mode=ParseMode.MARKDOWN)
-    if reply_markup:
-        kwargs["reply_markup"] = reply_markup
     if update.callback_query:
+        if reply_markup:
+            kwargs["reply_markup"] = reply_markup
         await update.callback_query.edit_message_text(**kwargs)
     else:
-        await update.message.reply_text(**kwargs, reply_markup=reply_markup or main_menu_keyboard())
+        kwargs["reply_markup"] = reply_markup or main_menu_keyboard()
+        await update.message.reply_text(**kwargs)
 
 
 # ── REGISTER ──────────────────────────────────────────────────────────────────

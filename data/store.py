@@ -17,6 +17,32 @@ Zero changes to bot code.
 from datetime import datetime, timezone
 from typing import Optional
 
+
+class ActiveBatchError(Exception):
+    """Raised when logging arrival while a batch is still pending or treating."""
+
+    def __init__(self, batch: dict):
+        self.batch = batch
+        super().__init__(batch["batch_id"])
+
+
+class InsufficientStockError(Exception):
+    """Raised when a treatment would deduct more buckets than available."""
+
+    def __init__(self, buckets: int, current: int):
+        self.buckets = buckets
+        self.current = current
+        super().__init__(f"need {buckets}, have {current}")
+
+
+class InvalidBatchStateError(Exception):
+    """Raised when starting treatment on a batch that is not pending."""
+
+    def __init__(self, batch_id: str, status: str):
+        self.batch_id = batch_id
+        self.status = status
+        super().__init__(f"batch {batch_id} is {status}")
+
 # ── in-memory tables ──────────────────────────────────────────────────────────
 
 _batches: list[dict] = []
@@ -28,8 +54,16 @@ _inventory: list[dict] = []
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
 
-def _next_id(table: list, prefix: str) -> str:
-    return f"{prefix}{len(table) + 1:03d}"
+def _next_id(table: list, prefix: str, id_field: str) -> str:
+    nums = []
+    for row in table:
+        row_id = row.get(id_field, "")
+        if row_id.startswith(prefix):
+            try:
+                nums.append(int(row_id[len(prefix):]))
+            except ValueError:
+                pass
+    return f"{prefix}{max(nums, default=0) + 1:03d}"
 
 def _current_stock() -> int:
     if not _inventory:
@@ -39,8 +73,12 @@ def _current_stock() -> int:
 # ── BATCHES ───────────────────────────────────────────────────────────────────
 
 def log_arrival(volume: float, logged_by: str, notes: str = "") -> dict:
+    active = get_active_batch()
+    if active:
+        raise ActiveBatchError(active)
+
     batch = {
-        "batch_id":   _next_id(_batches, "B"),
+        "batch_id":   _next_id(_batches, "B", "batch_id"),
         "arrived_at": _now(),
         "volume_l":   volume,
         "logged_by":  logged_by,
@@ -72,8 +110,16 @@ def get_all_batches() -> list[dict]:
 # ── TREATMENTS ────────────────────────────────────────────────────────────────
 
 def start_treatment(batch_id: str, logged_by: str) -> dict:
+    batch = next((b for b in _batches if b["batch_id"] == batch_id), None)
+    if not batch:
+        raise ValueError(f"Batch {batch_id} not found")
+    if batch["status"] != "pending":
+        raise InvalidBatchStateError(batch_id, batch["status"])
+    if get_active_treatment(batch_id):
+        raise InvalidBatchStateError(batch_id, "treating")
+
     treatment = {
-        "treatment_id":          _next_id(_treatments, "T"),
+        "treatment_id":          _next_id(_treatments, "T", "treatment_id"),
         "batch_id":              batch_id,
         "started_at":            _now(),
         "started_at_raw":        datetime.now(timezone.utc),
@@ -105,6 +151,10 @@ def end_treatment(
 ) -> dict:
     for t in _treatments:
         if t["treatment_id"] == treatment_id:
+            stock_err = validate_stock_deduction(buckets)
+            if stock_err:
+                raise InsufficientStockError(buckets, _current_stock())
+
             now = datetime.now(timezone.utc)
             started = t["started_at_raw"]
             duration = round((now - started).total_seconds() / 60, 1)
@@ -140,6 +190,17 @@ def end_treatment(
 
 def get_stock() -> int:
     return _current_stock()
+
+
+def validate_stock_deduction(buckets: int) -> Optional[str]:
+    """Return an error message if buckets cannot be deducted, else None."""
+    current = _current_stock()
+    if buckets > current:
+        return (
+            f"Not enough hypochlorite: *{buckets} buckets* needed, "
+            f"only *{current}* in stock.\n\nRestock before completing treatment."
+        )
+    return None
 
 
 def add_stock(buckets: int, logged_by: str, notes: str = "") -> int:

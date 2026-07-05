@@ -90,7 +90,6 @@ def main() -> None:
     # core
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("help",   cmd_help))
-    app.add_handler(CommandHandler("cancel", cmd_cancel))
 
     # global inline navigation callbacks
     app.add_handler(CallbackQueryHandler(cb_goto_arrival,       pattern=r"^goto_arrival$"))
@@ -111,6 +110,9 @@ def main() -> None:
     # report + status
     for h in build_report_handlers():
         app.add_handler(h)
+
+    # /cancel when not inside a conversation (conv handlers register their own fallbacks)
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
 
     # catch-all
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))

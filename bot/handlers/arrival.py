@@ -11,7 +11,7 @@ UI flow:
   5. If custom → bot asks for typed input
 """
 
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -22,12 +22,46 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from data.store import log_arrival
-from bot.keyboards import volume_inline, main_menu_keyboard, REMOVE
-from bot.helpers import username, restricted, divider
+from data.store import log_arrival, get_active_batch, ActiveBatchError
+from bot.keyboards import volume_inline, main_menu_keyboard
+from bot.helpers import username, username_md, md_escape, restricted, divider
 
 # conversation states
 WAIT_CUSTOM_VOLUME = 0
+
+
+def _active_batch_message(batch: dict) -> tuple[str, InlineKeyboardMarkup]:
+    status = batch["status"]
+    if status == "treating":
+        actions = [[InlineKeyboardButton("✅ End treatment", callback_data="goto_end_treatment")]]
+    else:
+        actions = [[InlineKeyboardButton("⏱ Start treatment", callback_data=f"treat_start_{batch['batch_id']}")]]
+    actions.append([InlineKeyboardButton("📌 View status", callback_data="status_refresh")])
+
+    text = (
+        f"⚠️ *Batch #{batch['batch_id']} is still active*\n\n"
+        f"{divider()}\n"
+        f"📦 Volume: *{batch['volume_l']:,.0f} L*\n"
+        f"📌 Status: *{status.upper()}*\n\n"
+        f"Finish or complete this batch before logging a new arrival."
+    )
+    return text, InlineKeyboardMarkup(actions)
+
+
+async def _restore_menu(update: Update, text: str) -> None:
+    """Send cancellation text and restore the bottom menu."""
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.reply_text(
+            "Use the menu below to continue.",
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_menu_keyboard(),
+        )
 
 
 # ── ENTRY ─────────────────────────────────────────────────────────────────────
@@ -35,6 +69,20 @@ WAIT_CUSTOM_VOLUME = 0
 @restricted
 async def arrival_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry: show inline volume picker."""
+    active = get_active_batch()
+    if active:
+        text, markup = _active_batch_message(active)
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(
+                text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup,
+            )
+        else:
+            await update.message.reply_text(
+                text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup,
+            )
+        return ConversationHandler.END
+
     text = (
         "🚛 *New cyanide delivery*\n\n"
         f"{divider()}\n"
@@ -62,7 +110,7 @@ async def cb_volume_selected(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         f"🚛 *Confirm delivery*\n\n"
         f"{divider()}\n"
         f"📦 Volume: *{volume:,.0f} L*\n"
-        f"👤 Logged by: {username(update)}\n\n"
+        f"👤 Logged by: {username_md(update)}\n\n"
         f"Is this correct?",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_confirm_inline(volume),
@@ -82,6 +130,7 @@ async def cb_volume_custom(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> in
     return WAIT_CUSTOM_VOLUME
 
 
+@restricted
 async def receive_custom_volume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle typed custom volume."""
     text = update.message.text.strip().replace(",", "")
@@ -101,7 +150,7 @@ async def receive_custom_volume(update: Update, ctx: ContextTypes.DEFAULT_TYPE) 
         f"🚛 *Confirm delivery*\n\n"
         f"{divider()}\n"
         f"📦 Volume: *{volume:,.0f} L*\n"
-        f"👤 Logged by: {username(update)}\n\n"
+        f"👤 Logged by: {username_md(update)}\n\n"
         f"Is this correct?",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_confirm_inline(volume),
@@ -116,14 +165,22 @@ async def cb_arrival_confirmed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     await query.answer("✅ Saving...")
 
     volume = ctx.user_data.get("pending_volume", 54000.0)
-    batch  = log_arrival(volume, username(update))
+    try:
+        batch = log_arrival(volume, username(update))
+    except ActiveBatchError as e:
+        text, markup = _active_batch_message(e.batch)
+        await query.edit_message_text(
+            text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup,
+        )
+        ctx.user_data.clear()
+        return ConversationHandler.END
 
     await query.edit_message_text(
         f"✅ *Arrival logged — Batch #{batch['batch_id']}*\n\n"
         f"{divider()}\n"
         f"📦 Volume: *{volume:,.0f} L*\n"
         f"🕐 Time: {batch['arrived_at']}\n"
-        f"👤 Logged by: {batch['logged_by']}\n\n"
+        f"👤 Logged by: {md_escape(batch['logged_by'])}\n\n"
         f"Tap *⏱ Start Treatment* in the menu when ready.",
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -132,17 +189,16 @@ async def cb_arrival_confirmed(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cb_arrival_cancelled(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer("Cancelled")
-    await query.edit_message_text("❌ Arrival cancelled.")
+    if update.callback_query:
+        await update.callback_query.answer("Cancelled")
     ctx.user_data.clear()
+    await _restore_menu(update, "❌ Arrival cancelled.")
     return ConversationHandler.END
 
 
 # ── HELPER ────────────────────────────────────────────────────────────────────
 
 def _confirm_inline(volume: float):
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(f"✅ Yes, save {volume:,.0f} L", callback_data="arrival_confirm"),
