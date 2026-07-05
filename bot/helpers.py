@@ -1,0 +1,100 @@
+"""
+bot/helpers.py
+──────────────
+Shared utilities: auth guard, formatting, alerts.
+"""
+
+import functools
+import logging
+from datetime import datetime, timezone
+
+from telegram import Update, Bot
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+
+from config import LOW_STOCK_THRESHOLD, ALLOWED_USERS, ALERT_CHAT_ID
+
+log = logging.getLogger(__name__)
+
+
+# ── AUTH ──────────────────────────────────────────────────────────────────────
+
+def is_allowed(update: Update) -> bool:
+    if not ALLOWED_USERS:
+        return True
+    return update.effective_user.id in ALLOWED_USERS
+
+
+def restricted(func):
+    """Decorator: blocks unauthorised users from write commands."""
+    @functools.wraps(func)
+    async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not is_allowed(update):
+            target = update.callback_query or update.message
+            await target.answer("⛔ Not authorised.") if update.callback_query else \
+                  await update.message.reply_text("⛔ You are not authorised to use this command.")
+            return
+        return await func(update, ctx, *args, **kwargs)
+    return wrapper
+
+
+# ── FORMATTING ────────────────────────────────────────────────────────────────
+
+def username(update: Update) -> str:
+    user = update.effective_user
+    return f"@{user.username}" if user.username else user.full_name
+
+
+def fmt_duration(minutes: float) -> str:
+    if not minutes:
+        return "—"
+    h, m = divmod(int(minutes), 60)
+    return f"{h}h {m}m" if h else f"{m}m"
+
+
+def stock_bar(stock: int) -> str:
+    """10-block visual bar. Green when healthy, red when low."""
+    if stock <= 0:
+        return "🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥"
+    if stock <= LOW_STOCK_THRESHOLD:
+        filled = max(1, min(10, stock * 10 // (LOW_STOCK_THRESHOLD * 2)))
+        return "🟧" * filled + "⬜" * (10 - filled)
+    filled = min(10, stock // 10)
+    return "🟩" * filled + "⬜" * (10 - filled)
+
+
+def low_stock_warning(stock: int) -> str:
+    if stock <= 0:
+        return "\n\n🚨 *STOCK EMPTY — Halt operations and restock immediately!*"
+    if stock <= LOW_STOCK_THRESHOLD:
+        return (
+            f"\n\n⚠️ *LOW STOCK ALERT*\n"
+            f"Only *{stock} buckets* remaining.\n"
+            f"Request a restock now!"
+        )
+    return ""
+
+
+def divider() -> str:
+    return "━━━━━━━━━━━━━━━━━━"
+
+
+# ── GROUP BROADCAST ALERT ────────────────────────────────────────────────────
+
+async def broadcast_alert(bot: Bot, text: str) -> None:
+    """
+    Sends a message to the group chat (ALERT_CHAT_ID).
+    Used for low-stock warnings and treatment completions.
+    Safe to call — silently logs if ALERT_CHAT_ID is not set.
+    """
+    if not ALERT_CHAT_ID:
+        log.warning("ALERT_CHAT_ID not set — skipping broadcast.")
+        return
+    try:
+        await bot.send_message(
+            chat_id=int(ALERT_CHAT_ID),
+            text=text,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as e:
+        log.error(f"Broadcast failed: {e}")
