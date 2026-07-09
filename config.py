@@ -56,7 +56,24 @@ def _load_credentials_json() -> str:
     return ""
 
 
-GOOGLE_CREDENTIALS_JSON = _load_credentials_json()
+def get_google_credentials_json() -> str:
+    """Read credentials from env at call time (Railway injects vars before process start)."""
+    return _load_credentials_json()
+
+
+def _credentials_debug() -> str:
+    """Safe summary of which credential env vars the process can see."""
+    json_len = len(os.getenv("GOOGLE_CREDENTIALS_JSON", "").strip())
+    b64_len = len(os.getenv("GOOGLE_CREDENTIALS_JSON_B64", "").strip())
+    path = GOOGLE_CREDENTIALS_PATH
+    path_exists = os.path.isfile(path)
+    google_keys = sorted(k for k in os.environ if "GOOGLE" in k or "CREDENTIAL" in k)
+    return (
+        f"GOOGLE_CREDENTIALS_JSON={json_len} chars, "
+        f"GOOGLE_CREDENTIALS_JSON_B64={b64_len} chars, "
+        f"path={path!r} exists={path_exists}, "
+        f"matching env keys={google_keys or 'none'}"
+    )
 
 
 def _parse_alert_chat_id(raw: str) -> str:
@@ -100,9 +117,10 @@ def validate_config() -> None:
         log.warning("SPREADSHEET_ID not set — using in-memory store (not for production)")
         return
 
-    if GOOGLE_CREDENTIALS_JSON.strip():
+    creds_json = get_google_credentials_json()
+    if creds_json.strip():
         try:
-            info = json.loads(GOOGLE_CREDENTIALS_JSON)
+            info = json.loads(creds_json)
         except json.JSONDecodeError as e:
             raise ValueError(
                 f"GOOGLE_CREDENTIALS_JSON is not valid JSON: {e}\n"
@@ -110,16 +128,19 @@ def validate_config() -> None:
             ) from e
         if info.get("type") != "service_account":
             raise ValueError("GOOGLE_CREDENTIALS_JSON must be a Google service account JSON file")
-        log.info("Google credentials loaded from env (%d chars)", len(GOOGLE_CREDENTIALS_JSON))
+        log.info("Google credentials loaded from env (%d chars)", len(creds_json))
         return
+
+    log.error("Credential check failed: %s", _credentials_debug())
 
     if os.path.isfile(GOOGLE_CREDENTIALS_PATH):
         return
 
     raise ValueError(
         "Google credentials missing.\n"
+        f"  Debug: {_credentials_debug()}\n"
         "  Railway: add GOOGLE_CREDENTIALS_JSON (paste full credentials.json)\n"
-        "           or GOOGLE_CREDENTIALS_JSON_B64 (run: base64 -w0 credentials.json)\n"
+        "           or GOOGLE_CREDENTIALS_JSON_B64 (run: uv run python scripts/encode_credentials.py)\n"
         "  Local:   keep credentials.json and set GOOGLE_CREDENTIALS_PATH=./credentials.json\n"
         "Note: GOOGLE_CREDENTIALS_PATH alone does not work on Railway — the file is not deployed."
     )

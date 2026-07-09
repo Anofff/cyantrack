@@ -8,7 +8,7 @@ import logging
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config import GOOGLE_CREDENTIALS_JSON, GOOGLE_CREDENTIALS_PATH, SPREADSHEET_ID
+from config import GOOGLE_CREDENTIALS_PATH, SPREADSHEET_ID, get_google_credentials_json
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ def clear_worksheet_cache() -> None:
 
 
 def _get_credentials() -> Credentials:
-    json_str = GOOGLE_CREDENTIALS_JSON.strip()
+    json_str = get_google_credentials_json().strip()
     if json_str:
         return Credentials.from_service_account_info(json.loads(json_str), scopes=SCOPES)
     return Credentials.from_service_account_file(GOOGLE_CREDENTIALS_PATH, scopes=SCOPES)
