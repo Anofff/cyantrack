@@ -139,6 +139,32 @@ def bootstrap_if_needed() -> bool:
     return bootstrap_spreadsheet(force=False)
 
 
+def reset_spreadsheet_data() -> None:
+    """
+    Wipe all data rows and restore header-only skeleton.
+    Use before production go-live or to discard pilot/test data.
+    """
+    sh = get_spreadsheet()
+    log.info("Resetting spreadsheet — clearing all data rows...")
+
+    for tab, headers in TAB_SCHEMA.items():
+        try:
+            ws = sh.worksheet(tab)
+        except gspread.WorksheetNotFound:
+            log.warning("Tab %r missing — will be created", tab)
+            _setup_worksheet(sh, tab, headers)
+            continue
+
+        ws.clear()
+        ws.update([headers], "A1", value_input_option="USER_ENTERED")
+        _format_header_row(ws, len(headers))
+
+    _remove_default_sheet_if_empty(sh)
+    clear_worksheet_cache()
+    _reset_module_caches()
+    log.info("Spreadsheet reset complete — headers only, no data rows")
+
+
 def _reset_module_caches() -> None:
     """Clear per-module worksheet singletons after tabs are created/recreated."""
     from sheets import batches, inventory, treatments

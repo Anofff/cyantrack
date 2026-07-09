@@ -8,7 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
 
-from config import BOT_TOKEN, INITIAL_STOCK, SPREADSHEET_ID
+from config import BOT_TOKEN, INITIAL_STOCK, SPREADSHEET_ID, validate_config
 from bot.keyboards import main_menu_keyboard
 from bot.helpers import md_escape
 from bot.handlers.arrival import build_arrival_handler
@@ -102,6 +102,7 @@ async def unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def main() -> None:
     log.info("🚀 Starting CyanTrack bot...")
+    validate_config()
 
     from data.api import hydrate, get_stock, add_stock
 

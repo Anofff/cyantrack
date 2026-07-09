@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import gspread
 from google.oauth2.service_account import Credentials
 
-from config import GOOGLE_CREDENTIALS_PATH, SPREADSHEET_ID
+from config import GOOGLE_CREDENTIALS_JSON, GOOGLE_CREDENTIALS_PATH, SPREADSHEET_ID
 
 log = logging.getLogger(__name__)
 
@@ -22,12 +23,19 @@ def clear_worksheet_cache() -> None:
     _worksheets.clear()
 
 
+def _get_credentials() -> Credentials:
+    json_str = GOOGLE_CREDENTIALS_JSON.strip()
+    if json_str:
+        return Credentials.from_service_account_info(json.loads(json_str), scopes=SCOPES)
+    return Credentials.from_service_account_file(GOOGLE_CREDENTIALS_PATH, scopes=SCOPES)
+
+
 def get_spreadsheet() -> gspread.Spreadsheet:
     global _spreadsheet
     if _spreadsheet is None:
         if not SPREADSHEET_ID:
             raise RuntimeError("SPREADSHEET_ID is not set in .env")
-        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_PATH, scopes=SCOPES)
+        creds = _get_credentials()
         _spreadsheet = gspread.authorize(creds).open_by_key(SPREADSHEET_ID)
         log.info("Connected to spreadsheet: %s", _spreadsheet.title)
     return _spreadsheet
